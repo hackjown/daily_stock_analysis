@@ -54,7 +54,8 @@ git diff --name-only "$BASE_REF"..HEAD
 python -m pytest -m "not network"
 ```
 
-> `Full-suite note` 必须与当次 PR 的 CI 结果保持一致；若本地复现存在环境相关失败，请明确标注为“本地环境差异”并给出 GitHub CI 通过/失败结论与链接。
+> `Full-suite note` 必须与当次 PR 的 CI 结果保持一致；若本地复现存在环境相关失败，请明确标注为“本地环境差异”并给出 GitHub CI 通过/失败结论与链接。  
+> 若本次 PR Head CI 已通过，请在 `Full-suite note` 中改为当前 Head 状态（如 `pass`），并删去所有“仍失败/失败”历史措辞。
 
 - 请在下面按实际结果填写并与 `Full-suite note` 保持一致（任一未填视为信息缺失）：
   - ai-governance：`pass` / `fail`，附链接
@@ -66,6 +67,8 @@ python -m pytest -m "not network"
 
 - 【必填】当前 Head CI：`ai-governance:pass / backend-gate:pass / docker-build:pass / web-gate:pass`（按实际结果替换）并附对应链接。  
   如需保留历史失败措辞，必须在同段写明“本地环境差异 + 当前 CI 已通过 + 当前 Head 结果链接”；否则不得出现“仍失败/失败”字样。
+
+- 若全部通过，请额外补充一句：`当前状态：全部通过（pass）`，并明确 Head CI 对应全部 `pass`。
 
 - 建议在 PR 描述内按上述格式追加一行：`当前 Head CI：ai-governance:pass / backend-gate:pass / docker-build:pass / web-gate:pass`（仅示例，按实际结果替换）。
 
@@ -94,6 +97,8 @@ python -m pytest -m "not network"
   - Playwright 命令（无截图时）：`cd apps/dsa-web && npx playwright test e2e/smoke.spec.ts --grep "settings page"`
   - 产物路径（无截图时）：`apps/dsa-web/test-results/**/smoke-settings-page-*.png`
   - 说明：截图（或产物）必须可见 `MARKET_REVIEW_REGION` 枚举变更文本（A 股 / 港股 / 美股 / 日股 / 韩股 / 全部市场）。
+
+- 若本 PR 修改 `MARKET_REVIEW_REGION`、设置字段文案或帮助文案（如大盘复盘市场/交易日开关/色彩方案），截图或替代证据必须可定位到“系统设置 → 市场复盘”区域并指向对应字段。
 
 > 若本 PR 修改 Web UI 或报告展示且无法获取截图，原因栏必须给出可复现替代证据（例如 Playwright 截图产物路径 + 命令），且不得留空。
 
