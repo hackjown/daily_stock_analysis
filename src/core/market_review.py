@@ -624,7 +624,10 @@ def _append_missing_sector_payload_block_to_market_segment(
     start, end = segment_span
     segment = base[start:end].strip()
     rendered_segment = f"{segment}\n\n{sector_block}".strip() if segment else sector_block
-    return f"{base[:start]}{rendered_segment}{base[end:]}".strip()
+    suffix = base[end:]
+    if suffix and not suffix.startswith(("\n", "\r")):
+        rendered_segment = f"{rendered_segment}\n\n"
+    return f"{base[:start]}{rendered_segment}{suffix}".strip()
 
 
 def _render_sector_payload_markdown_block(

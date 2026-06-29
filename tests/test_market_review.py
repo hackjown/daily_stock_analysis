@@ -700,6 +700,44 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         self.assertIn("| 1 | 科技 | +2.18% |", markdown)
         self.assertIn("| 1 | 半导体 | +1.86% |", markdown)
 
+    def test_render_market_review_payload_markdown_preserves_segment_boundaries_after_fallback(self) -> None:
+        markdown = market_review_module._render_market_review_payload_markdown(
+            {
+                "language": "en",
+                "markdown_report": (
+                    "## CN Market\n\n"
+                    "CN overview.\n\n"
+                    "## HK Market\n\n"
+                    "HK overview.\n\n"
+                    "---\n\n"
+                    "## US Market\n\n"
+                    "US overview."
+                ),
+                "markets": {
+                    "cn": {
+                        "title": "CN Market",
+                        "language": "en",
+                        "sectors": {"top": [{"name": "AI", "change_pct": 3.25}]},
+                    },
+                    "hk": {
+                        "title": "HK Market",
+                        "language": "en",
+                        "sectors": {"top": [{"name": "Tech", "change_pct": 2.18}]},
+                    },
+                    "us": {
+                        "title": "US Market",
+                        "language": "en",
+                        "sectors": {},
+                    },
+                },
+            }
+        )
+
+        self.assertIn("| 1 | AI | +3.25% |\n\n## HK Market", markdown)
+        self.assertIn("| 1 | Tech | +2.18% |\n\n---\n\n## US Market", markdown)
+        self.assertNotIn("+3.25% |## HK Market", markdown)
+        self.assertNotIn("+2.18% |---", markdown)
+
     def test_persist_market_review_history_saves_markdown_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             old_db_path = os.environ.get("DATABASE_PATH")
