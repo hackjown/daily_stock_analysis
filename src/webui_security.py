@@ -21,8 +21,8 @@ def _normalize_host_for_ip_lookup(host: str | None) -> str:
         return ""
     if normalized == "0":
         normalized = "0.0.0.0"
-    if normalized.startswith("[") and normalized.endswith("]"):
-        normalized = normalized[1:-1]
+    if normalized.startswith("[") and "]" in normalized:
+        normalized = normalized[1:normalized.rfind("]")]
     normalized = normalized.split("%", 1)[0].strip()
     if normalized.count(":") == 1 and "." in normalized:
         host_part, port = normalized.rsplit(":", 1)
@@ -39,9 +39,12 @@ def is_public_bind_host(host: str) -> bool:
     if not normalized_host:
         return False
     try:
-        return ipaddress.ip_address(normalized_host).is_unspecified
+        ip = ipaddress.ip_address(normalized_host)
     except ValueError:
         return False
+    if ip.is_unspecified:
+        return True
+    return not (ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast)
 
 
 def is_loopback_host(host: str | None) -> bool:

@@ -191,7 +191,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertFalse(should_skip_all)
 
     def test_public_webui_bind_fails_when_auth_is_disabled_without_override(self) -> None:
-        for host in ["0.0.0.0", "0", "0:0:0:0:0:0:0:0"]:
+        for host in ["0.0.0.0", "0", "0:0:0:0:0:0:0:0", "8.8.8.8"]:
             with self.subTest(host=host):
                 with patch.dict(
                     os.environ,
