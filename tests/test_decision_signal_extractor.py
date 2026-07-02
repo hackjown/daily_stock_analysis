@@ -210,6 +210,79 @@ def test_build_payload_uses_result_fallbacks_and_optional_catalysts() -> None:
     assert payload["metadata"]["holding_state"] == "unknown"
 
 
+def test_build_payload_aligns_high_neutral_action_without_guardrail_to_buy() -> None:
+    result = _result(
+        sentiment_score=72,
+        operation_advice="持有",
+        decision_type="hold",
+        action=None,
+    )
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        trace_id="trace-high-neutral",
+        query_source="api",
+        report_type="simple",
+        profile_source=BUILD_PROFILE_SOURCE,
+    )
+
+    assert payload is not None
+    assert payload["action"] == "buy"
+    assert payload["action_label"] == "买入"
+    assert payload["metadata"]["raw_action"] == "hold"
+    assert payload["metadata"]["final_action"] == "buy"
+    assert payload["metadata"]["action_adjustment_reason"] == "canonical_score_alignment"
+    assert payload["metadata"]["score_scale"]["score_band"] == "60-79"
+
+
+def test_build_payload_keeps_high_neutral_action_with_guardrail_reason() -> None:
+    result = _result(
+        sentiment_score=72,
+        operation_advice="持有/观望待回踩",
+        decision_type="hold",
+        action=None,
+    )
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        trace_id="trace-high-neutral-guarded",
+        query_source="api",
+        report_type="simple",
+        profile_source=BUILD_PROFILE_SOURCE,
+    )
+
+    assert payload is not None
+    assert payload["action"] == "watch"
+    assert payload["action_label"] == "观望"
+    assert payload["metadata"]["raw_action"] == "watch"
+    assert payload["metadata"]["final_action"] == "watch"
+    assert payload["metadata"]["guardrail_reason"] == "持有/观望待回踩"
+
+
+def test_build_payload_aligns_low_neutral_action_to_reduce() -> None:
+    result = _result(
+        sentiment_score=28,
+        operation_advice="观望",
+        decision_type="hold",
+        action=None,
+    )
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        trace_id="trace-low-neutral",
+        query_source="api",
+        report_type="simple",
+        profile_source=BUILD_PROFILE_SOURCE,
+    )
+
+    assert payload is not None
+    assert payload["action"] == "reduce"
+    assert payload["action_label"] == "减仓"
+    assert payload["metadata"]["raw_action"] == "watch"
+    assert payload["metadata"]["final_action"] == "reduce"
+    assert payload["metadata"]["score_scale"]["score_band"] == "20-39"
+
+
 def test_build_payload_records_empty_holding_state_from_explicit_portfolio_context() -> None:
     payload = build_decision_signal_payload_from_report(
         _result(),

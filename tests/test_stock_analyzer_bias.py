@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from src.stock_analyzer import (
+    BuySignal,
     StockTrendAnalyzer,
     TrendAnalysisResult,
     TrendStatus,
@@ -177,3 +178,45 @@ class StockAnalyzerBiasTestCase(unittest.TestCase):
         # else: risks.append 严禁追高 - so we get 严禁追高
         # Because 5.0 is not < 5.0, not > 5.0 when effective=base=5. So we hit the else.
         self._assert_contains(result.risk_factors, "严禁追高")
+
+    @patch("src.stock_analyzer.get_config")
+    def test_signal_thresholds_follow_canonical_score_scale(self, mock_get_config: MagicMock) -> None:
+        mock_get_config.return_value.bias_threshold = 5.0
+        cases = [
+            (
+                _make_result(trend_status=TrendStatus.BULL, bias_ma5=0.0),
+                BuySignal.BUY,
+                60,
+            ),
+            (
+                _make_result(
+                    trend_status=TrendStatus.CONSOLIDATION,
+                    bias_ma5=6.0,
+                    rsi_status=RSIStatus.STRONG_BUY,
+                ),
+                BuySignal.WAIT,
+                40,
+            ),
+            (
+                _make_result(trend_status=TrendStatus.CONSOLIDATION, bias_ma5=6.0),
+                BuySignal.SELL,
+                20,
+            ),
+            (
+                _make_result(
+                    trend_status=TrendStatus.STRONG_BEAR,
+                    bias_ma5=6.0,
+                    volume_status=VolumeStatus.HEAVY_VOLUME_DOWN,
+                    macd_status=MACDStatus.DEATH_CROSS,
+                    rsi_status=RSIStatus.WEAK,
+                ),
+                BuySignal.STRONG_SELL,
+                0,
+            ),
+        ]
+
+        for result, expected_signal, min_score in cases:
+            with self.subTest(expected_signal=expected_signal):
+                self.analyzer._generate_signal(result)
+                self.assertGreaterEqual(result.signal_score, min_score)
+                self.assertEqual(result.buy_signal, expected_signal)
