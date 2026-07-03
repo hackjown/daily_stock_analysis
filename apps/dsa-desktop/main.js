@@ -32,6 +32,8 @@ const LATEST_RELEASE_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${G
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 const DESKTOP_UPDATE_BACKUP_DIR = '.dsa-desktop-update-backup';
 const DESKTOP_UPDATE_BACKUP_MANIFEST_FILE = 'runtime-state.json';
+const DESKTOP_BACKEND_DEFAULT_HOST = '127.0.0.1';
+const PUBLIC_BIND_HOSTS = Object.freeze(new Set(['0.0.0.0', '::', '[::]', '*']));
 const MAC_DESKTOP_CLI_PATH_ENTRIES = Object.freeze([
   '/opt/homebrew/bin',
   '/usr/local/bin',
@@ -691,8 +693,104 @@ function extendMacDesktopBackendPath(rawPath) {
   return entries.join(path.delimiter);
 }
 
-function buildBackendEnvironment({ envFile, dbPath, logDir, port = null, sourceEnv = process.env }) {
+function normalizeBackendHost(value, fallback = '') {
+  const normalized = String(value || '').trim();
+  return normalized || fallback;
+}
+
+function parseEnvScalarValue(rawValue) {
+  let value = String(rawValue || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  const quote = value[0];
+  if ((quote === '"' || quote === "'") && value.endsWith(quote)) {
+    return value.slice(1, -1).trim();
+  }
+
+  return value.replace(/\s+#.*$/, '').trim();
+}
+
+function readEnvFileValue(envFile, key) {
+  if (!envFile || !fs.existsSync(envFile)) {
+    return null;
+  }
+
+  let content = '';
+  try {
+    content = fs.readFileSync(envFile, 'utf-8');
+  } catch (_error) {
+    return null;
+  }
+
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match || match[1] !== key) {
+      continue;
+    }
+    return parseEnvScalarValue(match[2]);
+  }
+
+  return null;
+}
+
+function resolveBackendBindHost({
+  envFile,
+  sourceEnv = process.env,
+  fallback = DESKTOP_BACKEND_DEFAULT_HOST,
+} = {}) {
+  const sourceHost = normalizeBackendHost(sourceEnv.WEBUI_HOST);
+  if (sourceHost) {
+    return sourceHost;
+  }
+
+  const envFileHost = normalizeBackendHost(readEnvFileValue(envFile, 'WEBUI_HOST'));
+  return envFileHost || fallback;
+}
+
+function resolveDesktopConnectHost(bindHost) {
+  const host = normalizeBackendHost(bindHost, DESKTOP_BACKEND_DEFAULT_HOST);
+  if (PUBLIC_BIND_HOSTS.has(host.toLowerCase())) {
+    return DESKTOP_BACKEND_DEFAULT_HOST;
+  }
+  return host;
+}
+
+function formatUrlHost(host) {
+  const normalized = normalizeBackendHost(host, DESKTOP_BACKEND_DEFAULT_HOST);
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    return normalized;
+  }
+  return normalized.includes(':') ? `[${normalized}]` : normalized;
+}
+
+function buildBackendUrl(host, port, pathname = '/') {
+  const url = new URL(`http://${formatUrlHost(host)}:${port}/`);
+  url.pathname = pathname;
+  return url.toString();
+}
+
+function buildBackendArgs({ host, port }) {
+  return [
+    '--serve-only',
+    '--host',
+    normalizeBackendHost(host, DESKTOP_BACKEND_DEFAULT_HOST),
+    '--port',
+    String(port),
+  ];
+}
+
+function buildBackendEnvironment({
+  envFile,
+  dbPath,
+  logDir,
+  port = null,
+  host = null,
+  sourceEnv = process.env,
+}) {
   const selectedPort = Number(port);
+  const selectedHost = normalizeBackendHost(host) || resolveBackendBindHost({ envFile, sourceEnv });
   const env = {
     ...sourceEnv,
     DSA_DESKTOP_MODE: 'true',
@@ -701,6 +799,7 @@ function buildBackendEnvironment({ envFile, dbPath, logDir, port = null, sourceE
     LOG_DIR: logDir,
     PYTHONUTF8: '1',
     PYTHONIOENCODING: 'utf-8',
+    WEBUI_HOST: selectedHost,
     WEBUI_ENABLED: 'false',
     BOT_ENABLED: 'false',
     DINGTALK_STREAM_ENABLED: 'false',
@@ -802,7 +901,8 @@ function ensureEnvFile(envPath) {
   fs.writeFileSync(envPath, '# Configure your API keys and stock list here.\n', 'utf-8');
 }
 
-function findAvailablePort(startPort = 8000, endPort = 8100) {
+function findAvailablePort(startPort = 8000, endPort = 8100, host = DESKTOP_BACKEND_DEFAULT_HOST) {
+  const bindHost = normalizeBackendHost(host, DESKTOP_BACKEND_DEFAULT_HOST);
   return new Promise((resolve, reject) => {
     const tryPort = (port) => {
       if (port > endPort) {
@@ -817,7 +917,7 @@ function findAvailablePort(startPort = 8000, endPort = 8100) {
       server.once('listening', () => {
         server.close(() => resolve(port));
       });
-      server.listen(port, '127.0.0.1');
+      server.listen(port, bindHost);
     };
 
     tryPort(startPort);
@@ -982,14 +1082,15 @@ function waitForHealth(
   });
 }
 
-function startBackend({ port, envFile, dbPath, logDir }) {
+function startBackend({ port, envFile, dbPath, logDir, host = null }) {
   const backendPath = resolveBackendPath();
   backendStartError = null;
   const launchStartedAt = Date.now();
+  const bindHost = normalizeBackendHost(host) || resolveBackendBindHost({ envFile });
 
-  const env = buildBackendEnvironment({ envFile, dbPath, logDir, port });
+  const env = buildBackendEnvironment({ envFile, dbPath, logDir, port, host: bindHost });
 
-  const args = ['--serve-only', '--host', '127.0.0.1', '--port', String(port)];
+  const args = buildBackendArgs({ host: bindHost, port });
   let launchMode = '';
   let launchCommand = '';
   let launchCwd = '';
@@ -1147,8 +1248,8 @@ function resolveDesktopVersion() {
   return String(app.getVersion() || '').trim();
 }
 
-function buildMainPageUrl(port, timestamp = Date.now()) {
-  const url = new URL(`http://127.0.0.1:${port}/`);
+function buildMainPageUrl(port, timestamp = Date.now(), host = DESKTOP_BACKEND_DEFAULT_HOST) {
+  const url = new URL(buildBackendUrl(host, port, '/'));
   url.searchParams.set('desktop_version', resolveDesktopVersion() || 'unknown');
   url.searchParams.set('cache_bust', String(timestamp));
   return url.toString();
@@ -1652,8 +1753,12 @@ async function createWindow() {
   ensureEnvFile(envPath);
   logStartup(`Env file ready: ${envPath}`);
 
+  const backendBindHost = resolveBackendBindHost({ envFile: envPath });
+  const backendConnectHost = resolveDesktopConnectHost(backendBindHost);
+  logStartup(`Backend bind host=${backendBindHost}; desktop connect host=${backendConnectHost}`);
+
   const portFindStartedAt = Date.now();
-  const port = await findAvailablePort(8000, 8100);
+  const port = await findAvailablePort(8000, 8100, backendBindHost);
   logStartup(`Using port ${port} (selected in ${Date.now() - portFindStartedAt}ms)`);
   logStartup(`App directory=${appDir}`);
 
@@ -1661,7 +1766,7 @@ async function createWindow() {
   const logDir = path.join(appDir, 'logs');
 
   try {
-    const launchInfo = startBackend({ port, envFile: envPath, dbPath, logDir });
+    const launchInfo = startBackend({ port, envFile: envPath, dbPath, logDir, host: backendBindHost });
     logStartup(`Backend launch mode=${launchInfo.mode}`);
     logStartup(`Backend launch command=${launchInfo.command}`);
     logStartup(`Backend launch cwd=${launchInfo.cwd}`);
@@ -1673,7 +1778,7 @@ async function createWindow() {
     return;
   }
 
-  const healthUrl = `http://127.0.0.1:${port}/api/health`;
+  const healthUrl = buildBackendUrl(backendConnectHost, port, '/api/health');
   let lastHealthProgressLogAt = 0;
   const healthProgressLogIntervalMs = 2000;
 
@@ -1738,7 +1843,7 @@ async function createWindow() {
     );
     logStartup(`Backend ready in ${healthInfo.elapsedMs}ms (${healthInfo.attempts} probes)`);
     const mainPageStartedAt = Date.now();
-    const mainPageUrl = buildMainPageUrl(port);
+    const mainPageUrl = buildMainPageUrl(port, Date.now(), backendConnectHost);
     await mainWindow.loadURL(mainPageUrl);
     logStartup(`Main page loadURL resolved in ${Date.now() - mainPageStartedAt}ms url=${mainPageUrl}`);
     logStartup(`Main UI loaded in ${Date.now() - startupStartedAt}ms`);
@@ -1782,20 +1887,27 @@ module.exports = {
   UPDATE_STATUS,
   buildUpdateState,
   backupPackagedRuntimeState,
+  buildBackendArgs,
   checkForDesktopUpdates,
   compareVersions,
   evaluateReleaseUpdate,
+  buildBackendUrl,
   buildBackendEnvironment,
   extendMacDesktopBackendPath,
   extractReleaseMetadata,
   fetchLatestReleaseJson,
+  findAvailablePort,
   buildMainPageUrl,
   migrateMacPackagedRuntimeState,
   normalizeVersionString,
   parseSemver,
+  readEnvFileValue,
   resolveAppDir,
+  resolveBackendBindHost,
+  resolveDesktopConnectHost,
   restorePackagedRuntimeStateFromBackup,
   sanitizeReleaseUrl,
+  startBackend,
   stopBackend,
   __getBackendProcessForTest() {
     return backendProcess;
