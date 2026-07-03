@@ -231,6 +231,48 @@ test('resolveBackendBindHost reads WEBUI_HOST from env file', (t) => {
   );
 });
 
+test('resolveBackendBindHost expands WEBUI_HOST dotenv references', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'BIND_HOST=0.0.0.0\nWEBUI_HOST=${BIND_HOST}\n', 'utf-8');
+
+  assert.equal(mainModule.readEnvFileValue(envPath, 'WEBUI_HOST', {}), '0.0.0.0');
+  assert.equal(
+    mainModule.resolveBackendBindHost({ envFile: envPath, sourceEnv: {} }),
+    '0.0.0.0'
+  );
+});
+
+test('resolveBackendBindHost handles quoted WEBUI_HOST with inline comment', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'WEBUI_HOST="0.0.0.0" # allow LAN\n', 'utf-8');
+
+  assert.equal(mainModule.readEnvFileValue(envPath, 'WEBUI_HOST', {}), '0.0.0.0');
+  assert.equal(
+    mainModule.resolveBackendBindHost({ envFile: envPath, sourceEnv: {} }),
+    '0.0.0.0'
+  );
+});
+
+test('resolveBackendBindHost supports dotenv default expansion', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'WEBUI_HOST=${MISSING_HOST:-127.0.0.1}\n', 'utf-8');
+
+  assert.equal(mainModule.readEnvFileValue(envPath, 'WEBUI_HOST', {}), '127.0.0.1');
+  assert.equal(
+    mainModule.resolveBackendBindHost({ envFile: envPath, sourceEnv: {} }),
+    '127.0.0.1'
+  );
+});
+
 test('resolveBackendBindHost keeps process WEBUI_HOST override ahead of env file', (t) => {
   const mainModule = loadMainModule(t, { platform: 'win32' });
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
@@ -252,7 +294,7 @@ test('buildBackendEnvironment injects env file WEBUI_HOST into backend process',
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
   const envPath = path.join(tmpDir, '.env');
-  fs.writeFileSync(envPath, 'WEBUI_HOST=0.0.0.0\n', 'utf-8');
+  fs.writeFileSync(envPath, 'BIND_HOST=0.0.0.0\nWEBUI_HOST=${BIND_HOST}\n', 'utf-8');
 
   const env = mainModule.buildBackendEnvironment({
     envFile: envPath,
@@ -318,7 +360,7 @@ test('startBackend passes WEBUI_HOST from env file to backend args and env', (t)
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
   const envPath = path.join(tmpDir, '.env');
-  fs.writeFileSync(envPath, 'WEBUI_HOST=0.0.0.0\n', 'utf-8');
+  fs.writeFileSync(envPath, 'BIND_HOST=0.0.0.0\nWEBUI_HOST=${BIND_HOST}\n', 'utf-8');
   const spawned = [];
   const fakeBackendProcess = new EventEmitter();
   fakeBackendProcess.stdout = new EventEmitter();

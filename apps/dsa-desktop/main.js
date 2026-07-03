@@ -698,41 +698,103 @@ function normalizeBackendHost(value, fallback = '') {
   return normalized || fallback;
 }
 
+function hasOwnValue(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function parseQuotedEnvValue(value, quote) {
+  let result = '';
+  for (let index = 1; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === quote) {
+      if (quote === '"') {
+        return result.replace(/\\([nrt"\\$])/g, (_match, escaped) => {
+          if (escaped === 'n') {
+            return '\n';
+          }
+          if (escaped === 'r') {
+            return '\r';
+          }
+          if (escaped === 't') {
+            return '\t';
+          }
+          return escaped;
+        });
+      }
+      return result.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+    }
+    result += char;
+  }
+
+  return value.trim();
+}
+
 function parseEnvScalarValue(rawValue) {
-  let value = String(rawValue || '').trim();
+  const value = String(rawValue || '').trimStart();
   if (!value) {
     return '';
   }
 
   const quote = value[0];
-  if ((quote === '"' || quote === "'") && value.endsWith(quote)) {
-    return value.slice(1, -1).trim();
+  if (quote === '"' || quote === "'") {
+    return parseQuotedEnvValue(value, quote);
   }
 
-  return value.replace(/\s+#.*$/, '').trim();
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === '#' && (index === 0 || /\s/.test(value[index - 1]))) {
+      return value.slice(0, index).trim();
+    }
+  }
+
+  return value.trim();
 }
 
-function readEnvFileValue(envFile, key) {
+function expandEnvReferences(value, values = {}, sourceEnv = process.env) {
+  return String(value || '').replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}/g,
+    (_match, name, defaultValue) => {
+      if (hasOwnValue(sourceEnv, name)) {
+        return String(sourceEnv[name]);
+      }
+      if (hasOwnValue(values, name)) {
+        return String(values[name]);
+      }
+      return defaultValue === undefined ? '' : defaultValue;
+    }
+  );
+}
+
+function readEnvFileValues(envFile, sourceEnv = process.env) {
   if (!envFile || !fs.existsSync(envFile)) {
-    return null;
+    return {};
   }
 
   let content = '';
   try {
     content = fs.readFileSync(envFile, 'utf-8');
   } catch (_error) {
-    return null;
+    return {};
   }
 
+  const values = {};
   for (const line of content.split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match || match[1] !== key) {
+    const match = line.match(/^\uFEFF?\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) {
       continue;
     }
-    return parseEnvScalarValue(match[2]);
+    values[match[1]] = expandEnvReferences(
+      parseEnvScalarValue(match[2]),
+      values,
+      sourceEnv
+    );
   }
 
-  return null;
+  return values;
+}
+
+function readEnvFileValue(envFile, key, sourceEnv = process.env) {
+  const values = readEnvFileValues(envFile, sourceEnv);
+  return hasOwnValue(values, key) ? values[key] : null;
 }
 
 function resolveBackendBindHost({
@@ -745,7 +807,7 @@ function resolveBackendBindHost({
     return sourceHost;
   }
 
-  const envFileHost = normalizeBackendHost(readEnvFileValue(envFile, 'WEBUI_HOST'));
+  const envFileHost = normalizeBackendHost(readEnvFileValue(envFile, 'WEBUI_HOST', sourceEnv));
   return envFileHost || fallback;
 }
 
