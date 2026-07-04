@@ -2134,6 +2134,25 @@ class Config:
         issues: List[HermesConfigIssue] = []
         blocks_legacy_fallback = False
         blocked_hermes_routes: List[str] = []
+
+        def _append_missing_channel_issue(
+            *,
+            channel_name: str,
+            channel_upper: str,
+            field_suffix: str,
+            code: str,
+            hint: str,
+        ) -> None:
+            issues.append(HermesConfigIssue(
+                f"LLM_{channel_upper}_{field_suffix}",
+                code,
+                (
+                    f"LLM channel '{channel_name}' 缺少 {hint}。"
+                    f"请配置 LLM_{channel_upper}_{field_suffix}，"
+                    f"或从 LLM_CHANNELS 中移除 {channel_name}。"
+                ),
+            ))
+
         for raw_name in channels_str.split(','):
             ch_name = raw_name.strip()
             if not ch_name:
@@ -2231,9 +2250,34 @@ class Config:
 
             if not api_keys:
                 _logger.warning(f"LLM channel '{ch_name}': no API key configured, skipped")
+                legacy_key_hint = {
+                    "aihubmix": "渠道模式不会读取 AIHUBMIX_KEY，需改填 LLM_AIHUBMIX_API_KEY",
+                    "deepseek": "渠道模式不会读取 DEEPSEEK_API_KEY，需改填 LLM_DEEPSEEK_API_KEY",
+                    "openai": "渠道模式不会读取 OPENAI_API_KEY，需改填 LLM_OPENAI_API_KEY",
+                    "gemini": "渠道模式不会读取 GEMINI_API_KEY，需改填 LLM_GEMINI_API_KEY",
+                    "anthropic": "渠道模式不会读取 ANTHROPIC_API_KEY，需改填 LLM_ANTHROPIC_API_KEY",
+                }.get(ch_lower)
+                if legacy_key_hint:
+                    hint = f"API Key；{legacy_key_hint}"
+                else:
+                    hint = "API Key"
+                _append_missing_channel_issue(
+                    channel_name=ch_name,
+                    channel_upper=ch_upper,
+                    field_suffix="API_KEY",
+                    code="missing_channel_api_key",
+                    hint=hint,
+                )
                 continue
             if not models:
                 _logger.warning(f"LLM channel '{ch_name}': no models configured, skipped")
+                _append_missing_channel_issue(
+                    channel_name=ch_name,
+                    channel_upper=ch_upper,
+                    field_suffix="MODELS",
+                    code="missing_channel_models",
+                    hint="模型列表",
+                )
                 continue
 
             channels.append({

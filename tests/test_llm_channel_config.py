@@ -144,6 +144,62 @@ class LLMChannelConfigTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_missing_channel_api_key_reports_exact_field_and_legacy_hint(
+        self,
+        _mock_parse_yaml,
+        _mock_setup_env,
+    ) -> None:
+        env = {
+            "LLM_CHANNELS": "aihubmix",
+            "AIHUBMIX_KEY": "sk-legacy-aihubmix-value",
+            "LLM_AIHUBMIX_PROTOCOL": "openai",
+            "LLM_AIHUBMIX_BASE_URL": "https://aihubmix.com/v1",
+            "LLM_AIHUBMIX_MODELS": "gpt-5.5",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        issues = config.validate_structured()
+        error = next(
+            issue
+            for issue in issues
+            if issue.field == "LLM_AIHUBMIX_API_KEY"
+        )
+        self.assertEqual(error.severity, "error")
+        self.assertEqual(error.code, "missing_channel_api_key")
+        self.assertIn("AIHUBMIX_KEY", error.message)
+        self.assertIn("LLM_AIHUBMIX_API_KEY", error.message)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_missing_channel_models_reports_exact_field(
+        self,
+        _mock_parse_yaml,
+        _mock_setup_env,
+    ) -> None:
+        env = {
+            "LLM_CHANNELS": "primary",
+            "LLM_PRIMARY_PROTOCOL": "openai",
+            "LLM_PRIMARY_BASE_URL": "https://api.example.com/v1",
+            "LLM_PRIMARY_API_KEY": "sk-primary-test-value",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        issues = config.validate_structured()
+        error = next(
+            issue
+            for issue in issues
+            if issue.field == "LLM_PRIMARY_MODELS"
+        )
+        self.assertEqual(error.severity, "error")
+        self.assertEqual(error.code, "missing_channel_models")
+        self.assertIn("LLM_PRIMARY_MODELS", error.message)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_hermes_channel_adds_deployment_marker(self, _mock_parse_yaml, _mock_setup_env) -> None:
         env = {
             "LLM_CHANNELS": "hermes",

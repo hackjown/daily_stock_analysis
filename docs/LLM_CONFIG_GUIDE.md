@@ -463,6 +463,7 @@ VISION_PROVIDER_PRIORITY=gemini,anthropic,openai
 |----------------------|----------------------|------------------|
 | **界面提示主模型未配置** | 系统不知道你到底想用哪家的哪个模型 | 在 `.env` 中写上一句明白话：`LITELLM_MODEL=provider/你的模型名`。比如 `openai/gpt-5.5` |
 | **我写了好几家的Key，为什么死活只有一个生效？修改还没用？** | 你把 **极简模式** 和 **渠道模式** 混着写了！ | 想好一条路走到黑——只要简单就删掉 `LLM_CHANNELS` 开头的；想要丰富备用切换就要全部转投到 `LLM_CHANNELS` 下的编制里。 |
+| **提示 `LLM_AIHUBMIX_API_KEY`、`LLM_DEEPSEEK_API_KEY` 或 `LLM_xxx_MODELS` 缺失** | 你启用了 `LLM_CHANNELS`，但仍把 key 填在 `AIHUBMIX_KEY` / `DEEPSEEK_API_KEY` 这类极简变量里，或漏填渠道模型列表。 | 渠道模式要成套填写 `LLM_<CHANNEL>_API_KEY(S)` + `LLM_<CHANNEL>_MODELS`；如果只想填一个 key，删除 `LLM_CHANNELS` 回到极简模式。 |
 | **错误码报 400 或 401 或 Invalid API Key** | API Key 填错、少复制了一截、账号充值没到账、或者模型名字敲错（极度常见）。 | 1. 检查复制的 Key 前后是否有误填空格。<br> 2. 检查 Base URL 最后是不是少了一个 `/v1`。<br> 3. 检查模型名是否少写了 `openai/` 之类的前缀！ |
 | **Kimi K2.6 报 `invalid temperature`（可能提示只允许 `1.0` 或 `0.6`）** | 该模型按 thinking / non-thinking 模式要求不同固定 temperature；旧配置或调用入口可能还在传 `0.7`。 | 升级后系统会对 `kimi-k2.6` 默认 / thinking 请求自动使用 `temperature=1.0`；如果你在 LiteLLM YAML 路由里显式关闭 thinking，则自动改用 `0.6`。模型名建议写成 `openai/kimi-k2.6` 并配合 Moonshot / 聚合平台的 OpenAI 兼容 Base URL 与 API Key。非 Kimi fallback 仍会继续使用你配置的 `LLM_TEMPERATURE`。 |
 | **GPT-5 / o 系列报 `temperature` 不支持或只允许默认值** | 这类模型只接受服务端默认采样参数，但旧调用入口会显式传 `0.7`。 | 升级后请求层会省略 `temperature`，让服务端使用默认值；`.env` / Web 设置中的 `LLM_TEMPERATURE` 不会被改写，切回普通模型后仍按原值发送。 |
