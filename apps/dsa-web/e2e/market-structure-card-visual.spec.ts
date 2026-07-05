@@ -1,7 +1,10 @@
 import { chromium, expect, test, type TestInfo } from '@playwright/test';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { build as viteBuild } from 'vite';
 import type { MarketStructureContext } from '../src/types/analysis';
 
 const shouldRunVisualEvidence = process.env.DSA_WEB_VISUAL_EVIDENCE === '1';
@@ -13,7 +16,8 @@ if (!shouldRunVisualEvidence) {
 test.use({ locale: 'zh-CN' });
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
-const staticAssetsDir = path.resolve(currentDir, '../../../static/assets');
+const webRoot = path.resolve(currentDir, '..');
+const sourceRoot = path.join(webRoot, 'src');
 
 const context: MarketStructureContext = {
   schemaVersion: 'market-structure-v1',
@@ -77,133 +81,100 @@ const context: MarketStructureContext = {
   },
 };
 
-function loadBuiltStyles(): string {
-  if (!fs.existsSync(staticAssetsDir)) {
-    throw new Error('Missing built Web assets. Run `cd apps/dsa-web && npm run build` before visual evidence capture.');
-  }
-
-  const cssFiles = fs.readdirSync(staticAssetsDir)
-    .filter((file) => file.endsWith('.css'))
-    .sort();
-
-  if (cssFiles.length === 0) {
-    throw new Error('Missing built Web CSS asset. Run `cd apps/dsa-web && npm run build` before visual evidence capture.');
-  }
-
-  return cssFiles
-    .map((file) => fs.readFileSync(path.join(staticAssetsDir, file), 'utf-8'))
-    .join('\n');
+function toImportPath(fromDir: string, targetPath: string): string {
+  const relativePath = path.relative(fromDir, targetPath).split(path.sep).join('/');
+  return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+function writeFile(filePath: string, content: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content);
 }
 
-function formatItem(item: { name: string; changePct?: number }): string {
-  if (typeof item.changePct === 'number') {
-    return `${item.name} ${item.changePct > 0 ? '+' : ''}${item.changePct.toFixed(2)}%`;
-  }
-  return item.name;
-}
+async function buildRealComponentFixture(testInfo: TestInfo): Promise<{
+  distIndexPath: string;
+  entryPath: string;
+}> {
+  const fixtureDir = testInfo.outputPath('market-structure-card-fixture');
+  const distDir = path.join(fixtureDir, 'dist');
+  const entryPath = path.join(fixtureDir, 'MarketStructureVisualApp.tsx');
+  const htmlPath = path.join(fixtureDir, 'index.html');
+  const componentImport = toImportPath(
+    fixtureDir,
+    path.join(sourceRoot, 'components/report/MarketStructureCard.tsx'),
+  );
+  const cssImport = toImportPath(fixtureDir, path.join(sourceRoot, 'index.css'));
+  const typeImport = toImportPath(fixtureDir, path.join(sourceRoot, 'types/analysis.ts'));
 
-function renderMetricLine(label: string, values: string[]): string {
-  return `
-    <div class="grid gap-1 text-sm sm:grid-cols-[7rem_1fr]">
-      <span class="text-secondary-text">${escapeHtml(label)}</span>
-      <span class="min-w-0 break-words text-foreground">${values.map(escapeHtml).join(' / ') || '暂无'}</span>
-    </div>
-  `;
-}
+  writeFile(
+    entryPath,
+    `
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import '${cssImport}';
+      import { MarketStructureCard } from '${componentImport}';
+      import type { MarketStructureContext } from '${typeImport}';
 
-function renderBadge(label: string, variant: 'default' | 'success' | 'warning' = 'default'): string {
-  const variantClass = variant === 'success'
-    ? 'border-success/20 bg-success/10 text-success'
-    : variant === 'warning'
-      ? 'border-warning/20 bg-warning/10 text-warning'
-      : 'border-border/55 bg-elevated/75 text-secondary-text';
+      const context: MarketStructureContext = ${JSON.stringify(context, null, 8)};
 
-  return `<span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium backdrop-blur-sm ${variantClass}">${escapeHtml(label)}</span>`;
-}
-
-function renderMarketStructureCardHtml(value: MarketStructureContext): string {
-  const theme = value.marketThemeContext!;
-  const position = value.stockMarketPosition!;
-  const activeThemes = (theme.activeThemes || []).map(formatItem);
-  const leadingConcepts = (theme.leadingConcepts || []).map(formatItem);
-  const leadingIndustries = (theme.leadingIndustries || []).map(formatItem);
-  const riskTags = [
-    '题材主线数据不完整',
-    '个股板块未匹配到市场题材榜单，个股位置按降级证据处理',
-  ];
-  const missingFields = [
-    ...(position.missingFields || []),
-    ...(theme.dataQuality?.missingFields || []),
-  ];
-
-  return `
-    <main class="min-h-screen bg-background p-8 text-foreground">
-      <div class="mx-auto max-w-5xl" data-testid="market-structure-visual-card">
-        <div class="terminal-card rounded-lg p-5">
-          <section aria-label="题材主线与个股位置">
-            <div class="mb-4 flex items-center justify-between gap-3">
-              <div class="flex items-baseline gap-2">
-                <span class="shrink-0 text-cyan">▣</span>
-                <span class="label-uppercase">市场位置</span>
-                <h3 class="text-base font-semibold text-foreground">题材主线与个股位置</h3>
-              </div>
-              <div class="flex shrink-0 items-center gap-2">${renderBadge('部分可用', 'warning')}</div>
+      createRoot(document.getElementById('root')!).render(
+        <React.StrictMode>
+          <main className="min-h-screen bg-background p-8 text-foreground">
+            <div className="mx-auto max-w-5xl" data-testid="market-structure-visual-card">
+              <MarketStructureCard context={context} language="zh" />
             </div>
-            <div class="grid gap-4 lg:grid-cols-2">
-              <div class="space-y-3">
-                <div class="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <span class="text-success">▲</span>
-                  <span>大盘题材层</span>
-                  ${renderBadge('部分可用', 'warning')}
-                </div>
-                ${renderMetricLine('活跃题材', activeThemes)}
-                ${renderMetricLine('领涨概念', leadingConcepts)}
-                ${renderMetricLine('领涨行业', leadingIndustries)}
-              </div>
-              <div class="space-y-3">
-                <div class="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <span class="text-cyan">▣</span>
-                  <span>个股位置层</span>
-                  ${renderBadge('部分可用', 'warning')}
-                </div>
-                ${renderMetricLine('主关联题材', [formatItem(position.primaryTheme!)])}
-                ${renderMetricLine('题材阶段', ['加速'])}
-                ${renderMetricLine('个股位置', ['跟随'])}
-              </div>
-            </div>
-            <div class="mt-4 grid gap-3 border-t border-border/60 pt-4 md:grid-cols-2">
-              <div>
-                <div class="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-secondary-text">
-                  <span class="text-warning">!</span>
-                  <span>风险标签</span>
-                </div>
-                <div class="flex flex-wrap gap-2">${riskTags.map((tag) => renderBadge(tag, 'warning')).join('')}</div>
-              </div>
-              <div>
-                <div class="mb-2 text-xs font-medium uppercase tracking-wide text-secondary-text">缺失证据</div>
-                <div class="flex flex-wrap gap-2">${missingFields.map((field) => renderBadge(field)).join('')}</div>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
-    </main>
-  `;
+          </main>
+        </React.StrictMode>,
+      );
+    `,
+  );
+  writeFile(
+    htmlPath,
+    `
+      <!doctype html>
+      <html lang="zh-CN">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>MarketStructureCard Real Component Visual Evidence</title>
+        </head>
+        <body>
+          <div id="root"></div>
+          <script type="module" src="/MarketStructureVisualApp.tsx"></script>
+        </body>
+      </html>
+    `,
+  );
+
+  await viteBuild({
+    root: fixtureDir,
+    base: './',
+    configFile: false,
+    publicDir: false,
+    logLevel: 'warn',
+    plugins: [tailwindcss(), react()],
+    define: {
+      __APP_PACKAGE_VERSION__: JSON.stringify('visual-evidence'),
+      __APP_BUILD_TIME__: JSON.stringify('2026-07-05T00:00:00.000Z'),
+    },
+    build: {
+      outDir: distDir,
+      emptyOutDir: true,
+      sourcemap: false,
+    },
+  });
+
+  return {
+    distIndexPath: path.join(distDir, 'index.html'),
+    entryPath,
+  };
 }
 
 function isMissingPlaywrightBrowser(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Executable doesn't exist");
 }
 
-async function attachDesktopScreenshotArtifact(artifact: string, testInfo: TestInfo): Promise<void> {
+async function attachDesktopScreenshotArtifact(distIndexPath: string, testInfo: TestInfo): Promise<void> {
   let browser;
   try {
     browser = await chromium.launch();
@@ -212,11 +183,12 @@ async function attachDesktopScreenshotArtifact(artifact: string, testInfo: TestI
       throw error;
     }
     const notePath = testInfo.outputPath('market-structure-card-screenshot-skipped.txt');
-    fs.writeFileSync(
+    writeFile(
       notePath,
       [
         'Playwright Chromium is not installed in this environment, so PNG capture was skipped.',
-        'The HTML artifact is still generated and can be opened to inspect the MarketStructureCard visual state.',
+        'The HTML artifact was built by Vite from the real MarketStructureCard React component.',
+        `Open ${distIndexPath} to inspect the same mock report card visual state locally.`,
       ].join('\n'),
     );
     await testInfo.attach('market-structure-card-screenshot-skipped', {
@@ -231,9 +203,13 @@ async function attachDesktopScreenshotArtifact(artifact: string, testInfo: TestI
       locale: 'zh-CN',
       viewport: { width: 1280, height: 900 },
     });
-    await page.setContent(artifact, { waitUntil: 'domcontentloaded' });
+    await page.goto(pathToFileURL(distIndexPath).toString(), { waitUntil: 'networkidle' });
     const card = page.getByTestId('market-structure-visual-card');
     await expect(card).toBeVisible();
+    await expect(card.getByRole('region', { name: '题材主线与个股位置' })).toBeVisible();
+    await expect(card.getByText('大盘题材层')).toBeVisible();
+    await expect(card.getByText('个股位置层')).toBeVisible();
+    await expect(card.getByText(/机器人概念 \+4\.20%/)).toBeVisible();
 
     const screenshotPath = testInfo.outputPath('market-structure-card-desktop.png');
     await card.screenshot({ path: screenshotPath });
@@ -247,36 +223,23 @@ async function attachDesktopScreenshotArtifact(artifact: string, testInfo: TestI
 }
 
 test.describe('MarketStructureCard visual evidence', () => {
-  test('writes desktop mock report card artifacts with market structure data', async ({ browserName }, testInfo) => {
-    const styles = loadBuiltStyles();
-    const markup = renderMarketStructureCardHtml(context);
-
+  test('writes desktop mock report artifacts from the real MarketStructureCard component', async (
+    { browserName },
+    testInfo,
+  ) => {
     expect(browserName).toBe('chromium');
-    expect(markup).toContain('题材主线与个股位置');
-    expect(markup).toContain('大盘题材层');
-    expect(markup).toContain('个股位置层');
-    expect(markup).toContain('机器人概念 +4.20%');
 
-    const artifact = `
-      <!doctype html>
-      <html lang="zh-CN">
-        <head>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>MarketStructureCard Visual Evidence</title>
-          <style>${styles}</style>
-        </head>
-        <body>${markup}</body>
-      </html>
-    `;
+    const { distIndexPath, entryPath } = await buildRealComponentFixture(testInfo);
+    expect(fs.existsSync(distIndexPath)).toBe(true);
 
-    const artifactPath = testInfo.outputPath('market-structure-card-desktop.html');
-    fs.writeFileSync(artifactPath, artifact);
-
-    await testInfo.attach('market-structure-card-desktop-html', {
-      path: artifactPath,
+    await testInfo.attach('market-structure-card-real-component-entry', {
+      path: entryPath,
+      contentType: 'text/plain',
+    });
+    await testInfo.attach('market-structure-card-real-component-html', {
+      path: distIndexPath,
       contentType: 'text/html',
     });
-    await attachDesktopScreenshotArtifact(artifact, testInfo);
+    await attachDesktopScreenshotArtifact(distIndexPath, testInfo);
   });
 });
