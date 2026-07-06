@@ -1,0 +1,156 @@
+name: US Market Alert Monitor
+
+on:
+  # GitHub cron is UTC. This broad Mon-Fri window covers NYSE regular hours
+  # in both EDT (13:30-20:00 UTC) and EST (14:30-21:00 UTC).
+  schedule:
+    - cron: '*/5 13-21 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Force run and ignore the US market-hours gate'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: us-market-alert-monitor-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check US market-hours window
+        id: window
+        env:
+          FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force_run == true && 'true' || 'false' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from datetime import time
+          from zoneinfo import ZoneInfo
+          from datetime import datetime
+
+          force = os.getenv("FORCE_RUN", "").lower() == "true"
+          now = datetime.now(ZoneInfo("America/New_York"))
+          open_time = time(9, 30)
+          close_time = time(16, 0)
+          should_run = force or (now.weekday() < 5 and open_time <= now.time() < close_time)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"should_run={'true' if should_run else 'false'}\n")
+              fh.write(f"ny_time={now.isoformat()}\n")
+
+          print(f"NY time: {now.isoformat()}")
+          print(f"Force run: {force}")
+          print(f"Should run: {should_run}")
+          PY
+
+      - name: Checkout
+        if: steps.window.outputs.should_run == 'true'
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        if: steps.window.outputs.should_run == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        if: steps.window.outputs.should_run == 'true'
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create runtime directories
+        if: steps.window.outputs.should_run == 'true'
+        run: mkdir -p data logs reports
+
+      - name: Restore alert state
+        if: steps.window.outputs.should_run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/stock_analysis.db
+            data/stock_analysis.db-shm
+            data/stock_analysis.db-wal
+          key: us-alert-state-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            us-alert-state-${{ github.ref_name }}-
+
+      - name: Run alert monitor once
+        if: steps.window.outputs.should_run == 'true'
+        env:
+          GITHUB_ACTIONS: 'true'
+          ALERT_WORKFLOW_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force_run == true && 'true' || 'false' }}
+          ALERT_WORKFLOW_SYNC_LEGACY_TO_DB: ${{ vars.ALERT_WORKFLOW_SYNC_LEGACY_TO_DB || 'true' }}
+          ALERT_WORKFLOW_COOLDOWN_SECONDS: ${{ vars.ALERT_WORKFLOW_COOLDOWN_SECONDS || secrets.ALERT_WORKFLOW_COOLDOWN_SECONDS || '86400' }}
+
+          AGENT_EVENT_MONITOR_ENABLED: ${{ vars.AGENT_EVENT_MONITOR_ENABLED || secrets.AGENT_EVENT_MONITOR_ENABLED || 'true' }}
+          AGENT_EVENT_MONITOR_INTERVAL_MINUTES: ${{ vars.AGENT_EVENT_MONITOR_INTERVAL_MINUTES || secrets.AGENT_EVENT_MONITOR_INTERVAL_MINUTES || '5' }}
+          AGENT_EVENT_ALERT_RULES_JSON: ${{ vars.AGENT_EVENT_ALERT_RULES_JSON || secrets.AGENT_EVENT_ALERT_RULES_JSON }}
+
+          DATABASE_PATH: data/stock_analysis.db
+          SQLITE_WAL_ENABLED: 'false'
+          LOG_LEVEL: INFO
+          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST }}
+          REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || secrets.REALTIME_SOURCE_PRIORITY || 'yfinance,longbridge,finnhub,alphavantage' }}
+          ENABLE_REALTIME_QUOTE: ${{ vars.ENABLE_REALTIME_QUOTE || secrets.ENABLE_REALTIME_QUOTE || 'true' }}
+          TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || secrets.TRADING_DAY_CHECK_ENABLED || 'true' }}
+
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          LONGBRIDGE_APP_KEY: ${{ secrets.LONGBRIDGE_APP_KEY }}
+          LONGBRIDGE_APP_SECRET: ${{ secrets.LONGBRIDGE_APP_SECRET }}
+          LONGBRIDGE_ACCESS_TOKEN: ${{ secrets.LONGBRIDGE_ACCESS_TOKEN }}
+          LONGBRIDGE_OAUTH_CLIENT_ID: ${{ secrets.LONGBRIDGE_OAUTH_CLIENT_ID }}
+          LONGBRIDGE_REGION: ${{ vars.LONGBRIDGE_REGION || secrets.LONGBRIDGE_REGION }}
+          LONGBRIDGE_PREFERRED: ${{ vars.LONGBRIDGE_PREFERRED || secrets.LONGBRIDGE_PREFERRED }}
+
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+          FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+          DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
+          EMAIL_SENDER: ${{ vars.EMAIL_SENDER || secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVERS: ${{ vars.EMAIL_RECEIVERS || secrets.EMAIL_RECEIVERS }}
+          EMAIL_SENDER_NAME: ${{ vars.EMAIL_SENDER_NAME || secrets.EMAIL_SENDER_NAME || 'daily_stock_analysis股票分析助手' }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          NTFY_URL: ${{ secrets.NTFY_URL }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          GOTIFY_URL: ${{ secrets.GOTIFY_URL }}
+          GOTIFY_TOKEN: ${{ secrets.GOTIFY_TOKEN }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          PUSHPLUS_TOPIC: ${{ vars.PUSHPLUS_TOPIC || secrets.PUSHPLUS_TOPIC }}
+          CUSTOM_WEBHOOK_URLS: ${{ secrets.CUSTOM_WEBHOOK_URLS }}
+          CUSTOM_WEBHOOK_BEARER_TOKEN: ${{ secrets.CUSTOM_WEBHOOK_BEARER_TOKEN }}
+          CUSTOM_WEBHOOK_BODY_TEMPLATE: ${{ vars.CUSTOM_WEBHOOK_BODY_TEMPLATE || secrets.CUSTOM_WEBHOOK_BODY_TEMPLATE }}
+          WEBHOOK_VERIFY_SSL: ${{ vars.WEBHOOK_VERIFY_SSL || secrets.WEBHOOK_VERIFY_SSL || 'true' }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_MAIN_CHANNEL_ID: ${{ secrets.DISCORD_MAIN_CHANNEL_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+
+          NOTIFICATION_ALERT_CHANNELS: ${{ vars.NOTIFICATION_ALERT_CHANNELS || secrets.NOTIFICATION_ALERT_CHANNELS }}
+          NOTIFICATION_DEDUP_TTL_SECONDS: ${{ vars.NOTIFICATION_DEDUP_TTL_SECONDS || secrets.NOTIFICATION_DEDUP_TTL_SECONDS || '0' }}
+          NOTIFICATION_COOLDOWN_SECONDS: ${{ vars.NOTIFICATION_COOLDOWN_SECONDS || secrets.NOTIFICATION_COOLDOWN_SECONDS || '0' }}
+          NOTIFICATION_QUIET_HOURS: ${{ vars.NOTIFICATION_QUIET_HOURS || secrets.NOTIFICATION_QUIET_HOURS }}
+          NOTIFICATION_TIMEZONE: ${{ vars.NOTIFICATION_TIMEZONE || secrets.NOTIFICATION_TIMEZONE || 'America/New_York' }}
+          NOTIFICATION_MIN_SEVERITY: ${{ vars.NOTIFICATION_MIN_SEVERITY || secrets.NOTIFICATION_MIN_SEVERITY }}
+        run: python scripts/run_alert_monitor_once.py
